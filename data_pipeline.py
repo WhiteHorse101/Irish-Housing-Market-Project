@@ -4,6 +4,8 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 import requests
+import re
+import numpy as np
 
 PPR_URL = "https://www.propertypriceregister.ie/website/npsra/ppr/npsra-ppr.nsf/Downloads/PPR-ALL.zip/$FILE/PPR-ALL.zip"
 DATA_DIR = "data"
@@ -72,12 +74,35 @@ def clean(df):
         "Property Size Description": "Size Band",
     })
 
+        # Bulk/institutional sale detection — see notebooks/EDA.ipynb Section 3
+    # for the full investigation and per-unit-price validation (~70% of
+    # extractable cases confirmed mathematically plausible)
+    bulk_pattern = re.compile(
+        r'\bblocks\b'
+        r'|\bsite for\b'
+        r'|\b\d+\s*units?\b'
+        r'|\b\d+\s*(?:residential\s+)?apartments?\b'
+        r'|\b\d+\s*-\s*\d+\b'
+        r'|\b\d+\s+to\s+\d+\b',
+        re.IGNORECASE
+    )
+    flag_address = df["Address"].str.contains(bulk_pattern, regex=True)
+
+    def _county_upper_bound(s, k=3):
+        q1, q3 = s.quantile(0.25), s.quantile(0.75)
+        return q3 + k * (q3 - q1)
+
+    log_price = np.log(df["Price"])
+    log_bounds = log_price.groupby(df["County"]).apply(_county_upper_bound)
+    flag_statistical = log_price > df["County"].map(log_bounds)
+
+    df["Likely Bulk Sale"] = flag_address | flag_statistical
+
     columns = [
     "Date", "Year", "Month", "Address", "County", "Eircode",
     "Price", "Not Full Market Price", "VAT Exclusive",
-    "Property Type",
+    "Property Type", "Likely Bulk Sale",
     ]
-
 
     df["Property Type"] = df["Property Type"].replace({
     "Teach/Árasán Cónaithe Atháimhe": "Second-Hand Dwelling house /Apartment",
